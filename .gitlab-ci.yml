@@ -1,0 +1,68 @@
+stages:
+  - test
+  - build
+  - publish
+
+variables:
+  RUBY_VERSION: "2.7"
+
+.test:
+  stage: test
+  image: ruby:$RUBY_VERSION
+  cache:
+    key:
+      files:
+        - Gemfile.lock
+      prefix: test-$RUBY_VERSION
+    paths:
+      - vendor/bundle/ruby
+  before_script:
+    - ruby -v
+    - gem install --no-document bundler -v '~> 2.0'
+    - bundle config set path vendor/bundle
+    - bundle install
+  interruptible: true
+
+rubocop:
+  extends: .test
+  script:
+    - bundle exec rubocop
+
+rails_test:
+  extends: .test
+  services:
+    - postgres:11
+  variables:
+    POSTGRES_USER: scalelite
+    POSTGRES_PASSWORD: scalelitepw
+    DATABASE_URL: postgres://scalelite:scalelitepw@postgres/scalelite_test
+  script:
+    - bundle exec rails test:db
+
+.docker:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  before_script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(echo -n ${CI_REGISTRY_USER}:${CI_REGISTRY_PASSWORD} | base64)\"}}}" > /kaniko/.docker/config.json
+  only:
+    refs:
+      - branches
+      - /v.*-gwdg.*/
+
+build-api:
+  extends: .docker
+  script:
+    - /kaniko/executor --cleanup --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --target api --destination $CI_REGISTRY_IMAGE/api:$CI_COMMIT_REF_SLUG
+
+build-poller:
+  extends: .docker
+  script:
+    - /kaniko/executor --cleanup --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --target poller --destination $CI_REGISTRY_IMAGE/poller:$CI_COMMIT_REF_SLUG
+
+build-importer:
+  extends: .docker
+  script:
+    - /kaniko/executor --cleanup --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --target recording-importer --destination $CI_REGISTRY_IMAGE/recording-importer:$CI_COMMIT_REF_SLUG
